@@ -603,7 +603,7 @@
       }, [filtered]);
 
       const byCountry    = useMemo(() => aggNorm(filtered, r => r["Country"], r => r["Sales"]), [filtered]);
-      const byCompany    = useMemo(() => aggNorm(filtered, r => r["Company"], r => r["Sales"]).slice(0, 12), [filtered]);
+      const byCompany    = useMemo(() => aggNorm(filtered, r => r["Company"], r => r["Sales"]), [filtered]);
       const byCategory   = useMemo(() => aggNorm(filtered, r => r["PROJECT CATEGORY"], r => r["Sales"]).slice(0, 10), [filtered]);
       const topProducts  = useMemo(() => { const m = {}; for (const r of filtered) { const k = String(r["EU CODE"] ?? "").trim(); if (!k) continue; if (!m[k]) m[k] = { key: r["EU Description"] || r["Product"] || k, value: 0 }; m[k].value += toNum(r["Sales"]); } return Object.values(m).sort((a, b) => b.value - a.value).slice(0, 10); }, [filtered]);
       const topSuppliers = useMemo(() => aggNorm(filtered, r => r["Suppliers"], r => r["Sales"]).slice(0, 10), [filtered]);
@@ -722,10 +722,14 @@
 
               {tab === "overview" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <MiniTable title="Sales by Country"          rows={byCountry}   max={Math.max(...byCountry.map(r => r.value), 1)} />
-                    <MiniTable title="Sales by Company"          rows={byCompany}   max={Math.max(...byCompany.map(r => r.value), 1)} />
-                    <MiniTable title="Top 10 Categories"         rows={byCategory}  max={Math.max(...byCategory.map(r => r.value), 1)} />
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: "1 1 220px", minWidth: 0 }}>
+                      <MiniTable title="Sales by Country"  rows={byCountry}  max={Math.max(...byCountry.map(r => r.value), 1)} />
+                      <MiniTable title="Top 10 Categories" rows={byCategory} max={Math.max(...byCategory.map(r => r.value), 1)} />
+                    </div>
+                    <div style={{ flex: "2 1 340px", minWidth: 0 }}>
+                      <MiniTable title={`Sales by Company (${byCompany.length})`} rows={byCompany} max={Math.max(...byCompany.map(r => r.value), 1)} />
+                    </div>
                   </div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <MiniTable title="Top 10 Products by Sales"  rows={topProducts}  max={Math.max(...topProducts.map(r => r.value), 1)} />

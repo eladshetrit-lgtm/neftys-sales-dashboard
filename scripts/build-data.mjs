@@ -107,6 +107,16 @@ function extractPeriodLabel(rawRows, periodColumn, file) {
   return entries[0][0];
 }
 
+// ─── Known misspellings in the source data — fixed automatically for every ─
+// ─── period, past and future, so nobody has to hand-edit CSVs. Add more   ─
+// ─── entries here (lowercased key -> corrected display value) as they turn up. ─
+
+const KNOWN_CORRECTIONS = {
+  "PROJECT CATEGORY": {
+    "accssesories": "Accessories",
+  },
+};
+
 // ─── Canonical casing map, built across ALL periods so the same value  ─────
 // ─── (e.g. "POLAND" / "Poland") always renders identically everywhere. ─────
 
@@ -118,6 +128,8 @@ function canonicalize(field, raw) {
   if (!trimmed) return trimmed;
   if (!CASE_NORMALIZED_FIELDS.includes(field)) return trimmed;
   const key = trimmed.toLowerCase();
+  const corrected = KNOWN_CORRECTIONS[field]?.[key];
+  if (corrected) return corrected;
   canonical[field] ??= {};
   if (!canonical[field][key]) canonical[field][key] = trimmed;
   return canonical[field][key];
