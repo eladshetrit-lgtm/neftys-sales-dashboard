@@ -228,6 +228,8 @@
       const [metric, setMetric] = useState("sales");
       const [search, setSearch] = useState("");
       const [showAll, setShowAll] = useState(false);
+      const [page, setPage] = useState(0);
+      const PER = 50;
 
       const { rows, cols, matrix, rowTotals, colTotals, totalCount } = useMemo(() => {
         const rowAgg = {}, colSet = new Set();
@@ -242,12 +244,16 @@
         const allSorted = Object.entries(rowAgg).sort((a, b) => b[1].sales - a[1].sales);
         const totalCount = allSorted.length;
         const topRows = allSorted.slice(0, showAll ? totalCount : topN).map(([k]) => k);
+        // Set lookup, not Array#includes — with "Show All" on, topRows can be thousands of
+        // entries, and doing an O(n) scan of it for every one of tens of thousands of source
+        // rows below is what was freezing the tab; this makes that lookup O(1).
+        const topRowSet = new Set(topRows);
         const colSales = {};
         for (const ck of colSet) colSales[ck] = filtered.filter(r => String(r["Country"] ?? "").trim() === ck).reduce((s, r) => s + toNum(r["Sales"]), 0);
         const cols = [...colSet].sort((a, b) => colSales[b] - colSales[a]);
         const matrix = {};
         for (const r of filtered) {
-          const rk = String(r[rowKey] ?? "").trim(); if (!topRows.includes(rk)) continue;
+          const rk = String(r[rowKey] ?? "").trim(); if (!topRowSet.has(rk)) continue;
           const ck = String(r["Country"] ?? "").trim(); if (!ck) continue;
           if (!matrix[rk]) matrix[rk] = {};
           if (!matrix[rk][ck]) matrix[rk][ck] = { sales: 0, qty: 0 };
@@ -263,6 +269,9 @@
       const filteredRows = search ? rows.filter(r => r.toLowerCase().includes(search.toLowerCase())) : rows;
       const maxVal = Math.max(...filteredRows.map(r => rowTotals[r]?.[metric] ?? 0), 1);
       const grandTotal = filteredRows.reduce((s, rk) => s + (rowTotals[rk]?.sales ?? 0), 0);
+      const pages = Math.max(1, Math.ceil(filteredRows.length / PER));
+      useEffect(() => { setPage(0); }, [search, showAll, metric, rowKey]);
+      const visRows = filteredRows.slice(page * PER, page * PER + PER);
       const cellBg = (val) => {
         if (!val || val === 0) return "transparent";
         const alpha = Math.max(0.08, Math.min(0.65, (val / maxVal) * 0.65));
@@ -276,6 +285,7 @@
               <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{title}</div>
               <div style={{ fontSize: 11, color: C.muted }}>
                 {showAll ? `All ${totalCount}` : `Top ${topN}`} {rowLabel.toLowerCase()}s × {cols.length} countries · green = sales share
+                {filteredRows.length > PER ? ` · showing ${page * PER + 1}–${Math.min(filteredRows.length, page * PER + PER)} of ${filteredRows.length}` : ""}
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -299,7 +309,7 @@
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((rk, i) => {
+                {visRows.map((rk, i) => {
                   const rowTotal = rowTotals[rk]?.[metric] ?? 0;
                   const pct = grandTotal > 0 ? (rowTotals[rk]?.sales ?? 0) / grandTotal * 100 : 0;
                   const bg = i % 2 === 0 ? "#091510" : "#0b1812";
@@ -334,6 +344,7 @@
               </tbody>
             </table>
           </div>
+          <Pager page={page} pages={pages} setPage={setPage} />
         </div>
       );
     }
