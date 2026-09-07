@@ -114,6 +114,7 @@ function extractPeriodLabel(rawRows, periodColumn, file) {
 const KNOWN_CORRECTIONS = {
   "PROJECT CATEGORY": {
     "accssesories": "Accessories",
+    "accssories": "Accessories",
   },
 };
 
