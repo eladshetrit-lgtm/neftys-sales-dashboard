@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neftys Sales Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #060d09; font-family: 'DM Mono','Fira Code','Courier New',monospace; }
+    select option { background: #091510; color: #c8e8d4; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0a1510; }
+    ::-webkit-scrollbar-thumb { background: #1e3328; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useCallback, useMemo, useEffect } = React;
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+    const norm = (v) => (typeof v === "string" ? v.trim().toLowerCase() : String(v ?? "").toLowerCase());
+    const toNum = (v) => {
+      if (v == null) return 0;
+      if (typeof v === "number") return isNaN(v) ? 0 : v;
+      const s = String(v).trim().replace(/[^0-9.\-]/g, "");
+      const n = parseFloat(s);
+      return isNaN(n) ? 0 : n;
+    };
+    const fmtNum = (n) => n == null || isNaN(n) ? "—" : new Intl.NumberFormat("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
+    const fmtCcy = (n) => n == null || isNaN(n) ? "—" : new Intl.NumberFormat("en-GB", { style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
+    const fmtK = (n) => !n || n === 0 ? "·" : n >= 1000000 ? `€${(n/1000000).toFixed(1)}M` : n >= 1000 ? `€${(n/1000).toFixed(0)}K` : `€${Math.round(n)}`;
+    const fmtDate = (iso) => {
+      if (!iso) return "";
+      try { return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
+      catch { return ""; }
+    };
+
+    // ─── CSV Parser (for the "Quick preview" upload — session only) ──────────
+    function parseCSV(text) {
+      const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+      if (lines.length < 2) return [];
+      function splitLine(line) {
+        const fields = []; let cur = "", inQuote = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') { if (inQuote && line[i+1] === '"') { cur += '"'; i++; } else inQuote = !inQuote; }
+          else if (ch === "," && !inQuote) { fields.push(cur); cur = ""; }
+          else cur += ch;
+        }
+        fields.push(cur); return fields;
+      }
+      const headers = splitLine(lines[0]).map(h => h.replace(/^﻿/, "").trim());
+      const rows = [];
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim(); if (!line) continue;
+        const vals = splitLine(line); const row = {};
+        headers.forEach((h, idx) => {
+          const raw = (vals[idx] ?? "").trim();
+          if (raw === "") { row[h] = null; return; }
+          const cleaned = raw.replace(/[€$£\s]/g, "").replace(/,/g, "");
+          const num = parseFloat(cleaned);
+          row[h] = isNaN(num) ? raw : num;
+        });
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    function buildMatchMap(rows) {
+      const map = {};
+      for (const r of rows) {
+        const key = String(r["EU CODE"] ?? "").trim();
+        if (!key) continue;
+        if (!map[key]) map[key] = [];
+        map[key].push(r);
+      }
+      return map;
+    }
+
+    function aggNorm(rows, keyFn, valFn) {
+      const labelMap = {}, totals = {};
+      for (const r of rows) {
+        const raw = String(keyFn(r) ?? "").trim();
+        if (!raw || raw === "0") continue;
+        const n = raw.toLowerCase();
+        if (!labelMap[n]) labelMap[n] = raw;
+        totals[n] = (totals[n] || 0) + toNum(valFn(r));
+      }
+      return Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([n, value]) => ({ key: labelMap[n], value }));
+    }
+
+    const C = { bg: "#060d09", panel: "#0e1a14", border: "#1e3328", green: "#2a9d5c", light: "#e8f5ee", mid: "#c8e8d4", muted: "#607a6a", accent: "#4a9e76" };
+    const BS = { background: C.panel, border: `1px solid ${C.border}`, color: C.accent, borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 12, fontFamily: "inherit" };
+    const TH = { color: C.muted, fontWeight: 700, padding: "6px 8px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", fontSize: 11, textAlign: "left" };
+    const mono = { fontFamily: "'DM Mono','Fira Code','Courier New',monospace" };
+
+    const Bar = ({ pct }) => (
+      <div style={{ width: "100%", height: 5, background: "#1a2e22", borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ width: `${Math.min(Math.max(pct || 0, 0), 100)}%`, height: "100%", background: C.green, borderRadius: 3 }} />
+      </div>
+    );
+
+    function Pager({ page, pages, setPage }) {
+      if (pages <= 1) return null;
+      return (
+        <div style={{ display: "flex", gap: 6, marginTop: 12, justifyContent: "center", alignItems: "center" }}>
+          <button onClick={() => setPage(0)} disabled={page === 0} style={BS}>«</button>
+          <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={BS}>‹</button>
+          <span style={{ color: C.muted, fontSize: 11 }}>{page + 1} / {pages}</span>
+          <button onClick={() => setPage(p => Math.min(pages - 1, p + 1))} disabled={page === pages - 1} style={BS}>›</button>
+          <button onClick={() => setPage(pages - 1)} disabled={page === pages - 1} style={BS}>»</button>
+        </div>
+      );
+    }
+
+    function MiniTable({ title, rows, max }) {
+      return (
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px", flex: "1 1 220px", minWidth: 0 }}>
+          <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>{title}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
+            <tbody>{rows.map((r, i) => (
+              <tr key={i} style={{ borderTop: i > 0 ? `1px solid #0f1e16` : "none" }}>
+                <td style={{ padding: "4px 6px 4px 0", color: C.mid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "42%" }}>{r.key}</td>
+                <td style={{ textAlign: "right", color: C.light, fontWeight: 700, padding: "4px 8px 4px 4px", whiteSpace: "nowrap", width: "30%" }}>{fmtCcy(r.value)}</td>
+                <td style={{ width: "28%", paddingLeft: 4 }}><Bar pct={(r.value / max) * 100} /></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      );
+    }
+
+    const ANIMAL_COLORS = ["#00ff88","#1a7a4a","#7fffd4","#0d5c36","#b7f5c8","#2ec27e","#004d2e","#52e09c","#3aaf6e","#d4f7e4"];
+
+    function AnimalCountryChart({ filtered }) {
+      const { countries, animalTypes, matrix, countryTotals, ctLabel, atLabel, grandTotal, atTotals } = useMemo(() => {
+        const mat = {}, ctLabel = {}, atLabel = {};
+        for (const r of filtered) {
+          const ctRaw = String(r["Country"] ?? "").trim(); if (!ctRaw) continue;
+          const atRaw = String(r["Animal Type"] ?? "").trim(); if (!atRaw || atRaw === "0") continue;
+          const ctKey = ctRaw.toLowerCase(), atKey = atRaw.toLowerCase();
+          if (!ctLabel[ctKey]) ctLabel[ctKey] = ctRaw;
+          if (!atLabel[atKey]) atLabel[atKey] = atRaw;
+          if (!mat[ctKey]) mat[ctKey] = {};
+          mat[ctKey][atKey] = (mat[ctKey][atKey] || 0) + toNum(r["Sales"]);
+        }
+        const countryTotals = {};
+        for (const ct of Object.keys(mat)) countryTotals[ct] = Object.values(mat[ct]).reduce((a, b) => a + b, 0);
+        const countries = Object.keys(countryTotals).sort((a, b) => countryTotals[b] - countryTotals[a]);
+        const atTotals = {};
+        for (const at of Object.keys(atLabel)) { atTotals[at] = 0; for (const ct of countries) atTotals[at] += mat[ct]?.[at] || 0; }
+        const animalTypes = Object.keys(atLabel).sort((a, b) => atTotals[b] - atTotals[a]);
+        const grandTotal = Object.values(countryTotals).reduce((a, b) => a + b, 0);
+        return { countries, animalTypes, matrix: mat, countryTotals, ctLabel, atLabel, grandTotal, atTotals };
+      }, [filtered]);
+      if (!countries.length) return null;
+
+      const renderBar = (rowTotal, getVal, isTotal = false) => {
+        const segments = animalTypes.map((at, i) => {
+          const v = getVal(at);
+          const pct = rowTotal > 0 ? (v / rowTotal) * 100 : 0;
+          return { at, i, v, pct };
+        }).filter(s => s.pct > 0);
+        return (
+          <div style={{ flex: 1, height: isTotal ? 24 : 18, display: "flex", borderRadius: 3, overflow: "hidden", background: "#1a2e22" }}>
+            {segments.map(({ at, i, v, pct }) => (
+              <div key={at} title={`${atLabel[at]}: ${fmtCcy(v)} (${pct.toFixed(1)}%)`}
+                style={{ width: `${pct}%`, background: ANIMAL_COLORS[i % ANIMAL_COLORS.length], display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                {pct >= 8 && (
+                  <span style={{ fontSize: 9, fontWeight: 700, color: "rgba(0,0,0,0.7)", whiteSpace: "nowrap", letterSpacing: "-0.02em", pointerEvents: "none" }}>
+                    {pct.toFixed(0)}%
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      };
+
+      return (
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px", flex: "1 1 340px", minWidth: 0 }}>
+          <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>Sales by Country & Animal Type</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {countries.map(ct => {
+              const total = countryTotals[ct];
+              return (
+                <div key={ct} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 72, flexShrink: 0, color: C.mid, fontSize: 11, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ctLabel[ct]}</div>
+                  {renderBar(total, at => matrix[ct]?.[at] || 0)}
+                </div>
+              );
+            })}
+            <div style={{ height: 1, background: C.border, margin: "3px 0" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 72, flexShrink: 0, color: C.accent, fontSize: 11, fontWeight: 700, textAlign: "right" }}>TOTAL</div>
+              {renderBar(grandTotal, at => atTotals[at], true)}
+            </div>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", marginTop: 10 }}>
+            {animalTypes.map((at, i) => {
+              const pct = grandTotal > 0 ? (atTotals[at] / grandTotal * 100).toFixed(1) : 0;
+              return (
+                <div key={at} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: C.muted }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: ANIMAL_COLORS[i % ANIMAL_COLORS.length], flexShrink: 0 }} />
+                  {atLabel[at]} <span style={{ color: C.accent }}>{pct}%</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    function MatrixView({ filtered, rowKey, rowLabel, title, topN = 30 }) {
+      const [metric, setMetric] = useState("sales");
+      const [search, setSearch] = useState("");
+      const [showAll, setShowAll] = useState(false);
+
+      const { rows, cols, matrix, rowTotals, colTotals, totalCount } = useMemo(() => {
+        const rowAgg = {}, colSet = new Set();
+        for (const r of filtered) {
+          const rk = String(r[rowKey] ?? "").trim(); if (!rk || rk === "0") continue;
+          const ck = String(r["Country"] ?? "").trim(); if (!ck) continue;
+          colSet.add(ck);
+          if (!rowAgg[rk]) rowAgg[rk] = { sales: 0, qty: 0 };
+          rowAgg[rk].sales += toNum(r["Sales"]);
+          rowAgg[rk].qty += toNum(r["QTY"]);
+        }
+        const allSorted = Object.entries(rowAgg).sort((a, b) => b[1].sales - a[1].sales);
+        const totalCount = allSorted.length;
+        const topRows = allSorted.slice(0, showAll ? totalCount : topN).map(([k]) => k);
+        const colSales = {};
+        for (const ck of colSet) colSales[ck] = filtered.filter(r => String(r["Country"] ?? "").trim() === ck).reduce((s, r) => s + toNum(r["Sales"]), 0);
+        const cols = [...colSet].sort((a, b) => colSales[b] - colSales[a]);
+        const matrix = {};
+        for (const r of filtered) {
+          const rk = String(r[rowKey] ?? "").trim(); if (!topRows.includes(rk)) continue;
+          const ck = String(r["Country"] ?? "").trim(); if (!ck) continue;
+          if (!matrix[rk]) matrix[rk] = {};
+          if (!matrix[rk][ck]) matrix[rk][ck] = { sales: 0, qty: 0 };
+          matrix[rk][ck].sales += toNum(r["Sales"]);
+          matrix[rk][ck].qty += toNum(r["QTY"]);
+        }
+        const rowTotals = {}, colTotals = {};
+        for (const rk of topRows) { rowTotals[rk] = { sales: 0, qty: 0 }; for (const ck of cols) { const v = matrix[rk]?.[ck] ?? { sales: 0, qty: 0 }; rowTotals[rk].sales += v.sales; rowTotals[rk].qty += v.qty; } }
+        for (const ck of cols) { colTotals[ck] = { sales: 0, qty: 0 }; for (const rk of topRows) { const v = matrix[rk]?.[ck] ?? { sales: 0, qty: 0 }; colTotals[ck].sales += v.sales; colTotals[ck].qty += v.qty; } }
+        return { rows: topRows, cols, matrix, rowTotals, colTotals, totalCount };
+      }, [filtered, rowKey, topN, showAll]);
+
+      const filteredRows = search ? rows.filter(r => r.toLowerCase().includes(search.toLowerCase())) : rows;
+      const maxVal = Math.max(...filteredRows.map(r => rowTotals[r]?.[metric] ?? 0), 1);
+      const grandTotal = filteredRows.reduce((s, rk) => s + (rowTotals[rk]?.sales ?? 0), 0);
+      const cellBg = (val) => {
+        if (!val || val === 0) return "transparent";
+        const alpha = Math.max(0.08, Math.min(0.65, (val / maxVal) * 0.65));
+        return `rgba(42,157,92,${alpha})`;
+      };
+
+      return (
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{title}</div>
+              <div style={{ fontSize: 11, color: C.muted }}>
+                {showAll ? `All ${totalCount}` : `Top ${topN}`} {rowLabel.toLowerCase()}s × {cols.length} countries · green = sales share
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Filter ${rowLabel.toLowerCase()}s…`}
+                style={{ background: "#091510", border: `1px solid ${C.border}`, borderRadius: 5, color: C.mid, padding: "5px 10px", fontSize: 12, width: 160, outline: "none", fontFamily: "inherit" }} />
+              <button onClick={() => setShowAll(v => !v)} style={{ ...BS, background: showAll ? C.green : C.panel, color: showAll ? C.light : C.accent, border: "none" }}>
+                {showAll ? `Showing All ${totalCount}` : `Show All ${totalCount}`}
+              </button>
+              <button onClick={() => setMetric("sales")} style={{ ...BS, background: metric === "sales" ? C.green : C.panel, color: metric === "sales" ? C.light : C.accent, border: "none" }}>€ Sales</button>
+              <button onClick={() => setMetric("qty")} style={{ ...BS, background: metric === "qty" ? C.green : C.panel, color: metric === "qty" ? C.light : C.accent, border: "none" }}>Qty</button>
+            </div>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...TH, minWidth: 160, position: "sticky", left: 0, background: "#0a1510", zIndex: 2 }}>{rowLabel}</th>
+                  <th style={{ ...TH, textAlign: "right", minWidth: 90 }}>Total</th>
+                  <th style={{ ...TH, textAlign: "right", minWidth: 40, paddingRight: 12 }}>%</th>
+                  {cols.map(c => <th key={c} style={{ ...TH, textAlign: "right", minWidth: 72 }}>{c}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map((rk, i) => {
+                  const rowTotal = rowTotals[rk]?.[metric] ?? 0;
+                  const pct = grandTotal > 0 ? (rowTotals[rk]?.sales ?? 0) / grandTotal * 100 : 0;
+                  const bg = i % 2 === 0 ? "#091510" : "#0b1812";
+                  return (
+                    <tr key={rk} style={{ borderBottom: `1px solid #0f1e16` }}>
+                      <td style={{ padding: "6px 8px", color: C.mid, fontWeight: 600, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", position: "sticky", left: 0, background: bg, zIndex: 1 }}>{rk}</td>
+                      <td style={{ padding: "6px 8px", color: C.light, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{metric === "sales" ? fmtCcy(rowTotal) : fmtNum(rowTotal)}</td>
+                      <td style={{ padding: "6px 8px", color: C.muted, textAlign: "right", paddingRight: 12, fontSize: 10 }}>{pct.toFixed(1)}%</td>
+                      {cols.map(ck => {
+                        const v = matrix[rk]?.[ck]?.[metric] ?? 0;
+                        return (
+                          <td key={ck} title={`${rk} → ${ck}: ${metric === "sales" ? fmtCcy(v) : fmtNum(v)}`}
+                            style={{ padding: "5px 8px", textAlign: "right", background: cellBg(v), color: v > 0 ? C.light : "#1e3328", fontWeight: v > 0 ? 600 : 400, whiteSpace: "nowrap" }}>
+                            {v > 0 ? (metric === "sales" ? fmtK(v) : fmtNum(v)) : "·"}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+                <tr style={{ borderTop: `2px solid ${C.border}` }}>
+                  <td style={{ padding: "7px 8px", color: C.accent, fontWeight: 700, position: "sticky", left: 0, background: "#091510", zIndex: 1 }}>TOTAL</td>
+                  <td style={{ padding: "7px 8px", color: C.accent, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>
+                    {metric === "sales" ? fmtCcy(filteredRows.reduce((s, rk) => s + (rowTotals[rk]?.sales ?? 0), 0)) : fmtNum(filteredRows.reduce((s, rk) => s + (rowTotals[rk]?.qty ?? 0), 0))}
+                  </td>
+                  <td />
+                  {cols.map(ck => {
+                    const v = metric === "sales" ? colTotals[ck]?.sales ?? 0 : colTotals[ck]?.qty ?? 0;
+                    return <td key={ck} style={{ padding: "7px 8px", color: C.accent, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", background: "#091510" }}>{metric === "sales" ? fmtK(v) : fmtNum(v)}</td>;
+                  })}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function buildSKUs(rows, extraFn) {
+      const m = {};
+      for (const r of rows) {
+        const k = String(r["EU CODE"] ?? "").trim(); if (!k) continue;
+        if (!m[k]) m[k] = { euCode: k, desc: r["EU Description"] || r["Product"] || k, sales: 0, qty: 0, companies: new Set(), countries: new Set(), extra: extraFn ? extraFn(r) : null };
+        m[k].sales += toNum(r["Sales"]); m[k].qty += toNum(r["QTY"]);
+        m[k].companies.add(String(r["Company"] ?? "").trim());
+        m[k].countries.add(String(r["Country"] ?? "").trim());
+      }
+      return Object.values(m).map(v => ({ ...v, companies: [...v.companies].filter(Boolean), countries: [...v.countries].filter(Boolean) })).sort((a, b) => b.sales - a.sales);
+    }
+
+    function SKUList({ rows, totalSales, extraCol }) {
+      const [search, setSearch] = useState(""); const [page, setPage] = useState(0); const PER = 25;
+      const fd = useMemo(() => { const r = !search ? rows : rows.filter(r => norm(r.desc).includes(norm(search)) || String(r.euCode).includes(search)); return [...r].sort((a, b) => b.sales - a.sales); }, [rows, search]);
+      const pages = Math.ceil(fd.length / PER); const vis = fd.slice(page * PER, page * PER + PER); const mx = Math.max(...rows.map(r => r.sales), 1);
+      const headers = ["Code", "Description", ...(extraCol ? [extraCol] : []), "Sales", "Qty", "Share", "Companies", "Countries"];
+      return (
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, textTransform: "uppercase" }}>{fd.length.toLocaleString()} SKUs</div>
+            <input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} placeholder="Search…" style={{ background: "#091510", border: `1px solid ${C.border}`, borderRadius: 5, color: C.mid, padding: "5px 10px", fontSize: 12, width: 220, outline: "none", fontFamily: "inherit" }} />
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr>{headers.map(h => <th key={h} style={{ ...TH, textAlign: ["Sales", "Qty"].includes(h) ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>{vis.map((r, i) => (
+                <tr key={r.euCode + i} style={{ background: i % 2 === 0 ? "#091510" : "transparent", borderBottom: `1px solid #0f1e16` }}>
+                  <td style={{ padding: "6px 8px", color: C.accent, fontWeight: 700, whiteSpace: "nowrap" }}>{r.euCode}</td>
+                  <td style={{ padding: "6px 8px", color: C.mid, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.desc}</td>
+                  {extraCol && <td style={{ padding: "6px 8px", color: C.muted, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.extra || "—"}</td>}
+                  <td style={{ padding: "6px 8px", color: C.light, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{fmtCcy(r.sales)}</td>
+                  <td style={{ padding: "6px 8px", color: C.muted, textAlign: "right" }}>{fmtNum(r.qty)}</td>
+                  <td style={{ padding: "6px 8px", minWidth: 80 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ flex: 1 }}><Bar pct={(r.sales / mx) * 100} /></div>
+                      <span style={{ color: C.muted, fontSize: 10, minWidth: 28, textAlign: "right" }}>{totalSales ? ((r.sales / totalSales) * 100).toFixed(1) : 0}%</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: "6px 8px", color: C.muted, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.companies.slice(0, 2).join(", ")}{r.companies.length > 2 ? ` +${r.companies.length - 2}` : ""}</td>
+                  <td style={{ padding: "6px 8px", color: C.muted, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.countries.slice(0, 2).join(", ")}{r.countries.length > 2 ? ` +${r.countries.length - 2}` : ""}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <Pager page={page} pages={pages} setPage={setPage} />
+        </div>
+      );
+    }
+
+    function GroupView({ filtered, groupKey, title, extraCol, extraFn }) {
+      const [selected, setSelected] = useState(null);
+      const groups = useMemo(() => {
+        const labelMap = {}, m = {};
+        for (const r of filtered) {
+          const raw = String(r[groupKey] ?? "").trim(); if (!raw || raw === "0") continue;
+          const n = raw.toLowerCase();
+          if (!labelMap[n]) labelMap[n] = raw;
+          if (!m[n]) m[n] = { sales: 0, qty: 0, skus: new Set(), countries: new Set(), companies: new Set(), productLines: new Set(), rows: [] };
+          m[n].sales += toNum(r["Sales"]); m[n].qty += toNum(r["QTY"]);
+          m[n].skus.add(String(r["EU CODE"] ?? "").trim());
+          m[n].countries.add(String(r["Country"] ?? "").trim());
+          m[n].companies.add(String(r["Company"] ?? "").trim());
+          const pl = String(r["Product Line"] ?? "").trim();
+          if (pl && pl !== "0") m[n].productLines.add(pl.toLowerCase());
+          m[n].rows.push(r);
+        }
+        return Object.entries(m).map(([n, v]) => ({ label: labelMap[n], ...v, skus: v.skus.size, countries: [...v.countries].filter(Boolean), companies: [...v.companies].filter(Boolean), productLines: v.productLines.size })).sort((a, b) => b.sales - a.sales);
+      }, [filtered, groupKey]);
+      const maxS = Math.max(...groups.map(r => r.sales), 1);
+      const total = groups.reduce((a, r) => a + r.sales, 0);
+      const grp = groups.find(g => g.label === selected);
+      const skus = useMemo(() => grp ? buildSKUs(grp.rows, extraFn) : [], [grp, extraFn]);
+      const isSupplier = groupKey === "Suppliers";
+
+      if (selected && grp) return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <button onClick={() => setSelected(null)} style={{ ...BS, alignSelf: "flex-start" }}>← Back to {title}</button>
+          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18 }}>
+            <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>{title.replace(/s$/, "")}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: C.light, marginBottom: 12 }}>{selected}</div>
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+              {[["Sales", fmtCcy(grp.sales)], ["Qty", fmtNum(grp.qty)], ["SKUs", fmtNum(skus.length)], ...(isSupplier ? [["Product Lines", grp.productLines]] : []), ["Countries", grp.countries.length], ["Companies", grp.companies.length]].map(([l, v]) => (
+                <div key={l}><div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase" }}>{l}</div><div style={{ fontSize: 16, fontWeight: 800, color: C.light, marginTop: 2 }}>{v}</div></div>
+              ))}
+            </div>
+          </div>
+          <SKUList rows={skus} totalSales={grp.sales} extraCol={extraCol} />
+        </div>
+      );
+
+      const colHeaders = isSupplier
+        ? ["Supplier", "Sales (€)", "%", "Qty", "SKUs", "Prod. Lines", "Countries", "Companies"]
+        : ["Product Line", "Sales (€)", "%", "Qty", "SKUs", "Countries", "Companies"];
+
+      return (
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18 }}>
+          <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>{title} — click any row to drill into SKUs</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>{groups.length} {title.toLowerCase()} · {fmtCcy(total)} total · sorted high → low</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr>{colHeaders.map(h => <th key={h} style={{ ...TH, textAlign: ["Sales (€)", "%", "Qty", "SKUs", "Prod. Lines"].includes(h) ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>{groups.map((r, i) => (
+                <tr key={r.label} onClick={() => setSelected(r.label)}
+                  style={{ background: i % 2 === 0 ? "#091510" : "transparent", borderBottom: `1px solid #0f1e16`, cursor: "pointer" }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#0f2218"}
+                  onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? "#091510" : "transparent"}>
+                  <td style={{ padding: "7px 8px", color: C.mid, fontWeight: 600 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ width: 55, flexShrink: 0 }}><Bar pct={(r.sales / maxS) * 100} /></div>{r.label}
+                    </div>
+                  </td>
+                  <td style={{ padding: "7px 8px", color: C.light, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{fmtCcy(r.sales)}</td>
+                  <td style={{ padding: "7px 8px", color: C.muted, textAlign: "right" }}>{total ? ((r.sales / total) * 100).toFixed(1) : 0}%</td>
+                  <td style={{ padding: "7px 8px", color: C.muted, textAlign: "right" }}>{fmtNum(r.qty)}</td>
+                  <td style={{ padding: "7px 8px", color: C.muted, textAlign: "right" }}>{r.skus}</td>
+                  {isSupplier && <td style={{ padding: "7px 8px", color: C.muted, textAlign: "right" }}>{r.productLines}</td>}
+                  <td style={{ padding: "7px 8px", color: C.muted }}>{r.countries.slice(0, 3).join(", ")}{r.countries.length > 3 ? ` +${r.countries.length - 3}` : ""}</td>
+                  <td style={{ padding: "7px 8px", color: C.muted }}>{r.companies.slice(0, 3).join(", ")}{r.companies.length > 3 ? ` +${r.companies.length - 3}` : ""}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function MatchedView({ matchMap, filters }) {
+      const [page, setPage] = useState(0); const [search, setSearch] = useState(""); const PER = 20;
+      const rows = useMemo(() => Object.entries(matchMap).filter(([, r]) => r.length > 1).map(([euCode, rows]) => {
+        const f = rows.filter(r => {
+          if (filters.country && norm(r["Country"]) !== norm(filters.country)) return false;
+          if (filters.company && norm(r["Company"]) !== norm(filters.company)) return false;
+          if (filters.productLine && norm(r["Product Line"]) !== norm(filters.productLine)) return false;
+          if (filters.supplier && norm(r["Suppliers"]) !== norm(filters.supplier)) return false;
+          if (filters.category && norm(r["PROJECT CATEGORY"]) !== norm(filters.category)) return false;
+          return true;
+        });
+        if (f.length < 2) return null;
+        return { euCode, description: f[0]["EU Description"] || f[0]["Product"] || "", totalSales: f.reduce((a, r) => a + toNum(r["Sales"]), 0), totalQty: f.reduce((a, r) => a + toNum(r["QTY"]), 0), companies: [...new Set(f.map(r => r["Company"]).filter(Boolean))], countries: [...new Set(f.map(r => r["Country"]).filter(Boolean))] };
+      }).filter(Boolean).filter(r => !search || String(r.euCode).includes(search) || norm(r.description).includes(norm(search))).sort((a, b) => b.totalSales - a.totalSales), [matchMap, filters, search]);
+      const pages = Math.ceil(rows.length / PER); const vis = rows.slice(page * PER, page * PER + PER);
+      return (
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, textTransform: "uppercase" }}>{rows.length.toLocaleString()} matched EU codes · sorted high → low</div>
+            <input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} placeholder="Search…" style={{ background: "#091510", border: `1px solid ${C.border}`, borderRadius: 5, color: C.mid, padding: "5px 10px", fontSize: 12, width: 220, outline: "none", fontFamily: "inherit" }} />
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr>{["EU Code", "Description", "Total Sales", "Qty", "Companies", "Countries"].map(h => <th key={h} style={{ ...TH, textAlign: ["Total Sales", "Qty"].includes(h) ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>{vis.map((r, i) => (
+                <tr key={r.euCode} style={{ background: i % 2 === 0 ? "#091510" : "transparent", borderBottom: `1px solid #0f1e16` }}>
+                  <td style={{ padding: "6px 8px", color: C.accent, fontWeight: 700 }}>{r.euCode}</td>
+                  <td style={{ padding: "6px 8px", color: C.mid, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.description}</td>
+                  <td style={{ padding: "6px 8px", color: C.light, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{fmtCcy(r.totalSales)}</td>
+                  <td style={{ padding: "6px 8px", color: C.muted, textAlign: "right" }}>{fmtNum(r.totalQty)}</td>
+                  <td style={{ padding: "6px 8px", color: C.muted }}>{r.companies.slice(0, 3).join(", ")}{r.companies.length > 3 ? ` +${r.companies.length - 3}` : ""}</td>
+                  <td style={{ padding: "6px 8px", color: C.muted }}>{r.countries.slice(0, 3).join(", ")}{r.countries.length > 3 ? ` +${r.countries.length - 3}` : ""}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <Pager page={page} pages={pages} setPage={setPage} />
+        </div>
+      );
+    }
+
+    const INIT_FILTERS = { country: "", company: "", animalType: "", productLine: "", supplier: "", category: "" };
+
+    function App() {
+      const [periodsMeta, setPeriodsMeta] = useState(null);   // { periods, defaultPeriodId }
+      const [periodId, setPeriodId] = useState(null);          // currently selected official period id
+      const [data, setData] = useState(null);                  // rows currently on screen
+      const [preview, setPreview] = useState(null);             // { name } when a Quick Preview CSV is active
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [filters, setFilters] = useState(INIT_FILTERS);
+      const [tab, setTab] = useState("overview");
+
+      // Load the list of available periods once on mount.
+      useEffect(() => {
+        fetch("data/processed/index.json")
+          .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+          .then(meta => {
+            setPeriodsMeta(meta);
+            setPeriodId(meta.defaultPeriodId);
+          })
+          .catch(err => { setError("Could not load period list: " + err.message); setLoading(false); });
+      }, []);
+
+      // Load the selected period's data whenever it changes (unless a Quick Preview is active).
+      useEffect(() => {
+        if (!periodId || preview) return;
+        const meta = periodsMeta?.periods?.find(p => p.id === periodId);
+        if (!meta) return;
+        setLoading(true); setError(null);
+        fetch(meta.file)
+          .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+          .then(rows => { setData(rows); setFilters(INIT_FILTERS); setTab("overview"); })
+          .catch(err => setError("Could not load data: " + err.message))
+          .finally(() => setLoading(false));
+      }, [periodId, periodsMeta, preview]);
+
+      const handleFile = useCallback((file) => {
+        if (!file) return;
+        setLoading(true); setError(null);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const rows = parseCSV(e.target.result);
+            if (!rows.length) throw new Error("No data found");
+            setData(rows); setPreview({ name: file.name }); setFilters(INIT_FILTERS); setTab("overview");
+          } catch (err) { setError("Could not parse file: " + err.message); }
+          finally { setLoading(false); }
+        };
+        reader.onerror = () => { setError("Could not read file"); setLoading(false); };
+        reader.readAsText(file, "latin1");
+      }, []);
+
+      const onFile = (e) => { const f = e.dataTransfer?.files?.[0] ?? e.target?.files?.[0]; if (f) handleFile(f); };
+      const exitPreview = () => setPreview(null);
+
+      const matchMap = useMemo(() => data ? buildMatchMap(data) : {}, [data]);
+
+      const filtered = useMemo(() => {
+        if (!data) return [];
+        return data.filter(r => {
+          if (filters.country && norm(r["Country"]) !== norm(filters.country)) return false;
+          if (filters.company && norm(r["Company"]) !== norm(filters.company)) return false;
+          if (filters.animalType && norm(r["Animal Type"]) !== norm(filters.animalType)) return false;
+          if (filters.productLine && norm(r["Product Line"]) !== norm(filters.productLine)) return false;
+          if (filters.supplier && norm(r["Suppliers"]) !== norm(filters.supplier)) return false;
+          if (filters.category && norm(r["PROJECT CATEGORY"]) !== norm(filters.category)) return false;
+          return true;
+        });
+      }, [data, filters]);
+
+      const opts = useMemo(() => {
+        if (!data) return {};
+        const buildOpts = (keyFn) => {
+          const labelMap = {}, totals = {};
+          for (const r of data) {
+            const raw = String(keyFn(r) ?? "").trim(); if (!raw || raw === "0") continue;
+            const n = raw.toLowerCase();
+            if (!labelMap[n]) labelMap[n] = raw;
+            totals[n] = (totals[n] || 0) + toNum(r["Sales"]);
+          }
+          return Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([n]) => labelMap[n]);
+        };
+        return {
+          countries:    buildOpts(r => r["Country"]),
+          companies:    buildOpts(r => r["Company"]),
+          animalTypes:  buildOpts(r => r["Animal Type"]),
+          productLines: buildOpts(r => r["Product Line"]),
+          suppliers:    buildOpts(r => r["Suppliers"]),
+          categories:   buildOpts(r => r["PROJECT CATEGORY"]),
+        };
+      }, [data]);
+
+      const kpis = useMemo(() => {
+        if (!filtered.length) return null;
+        return {
+          sales:      filtered.reduce((a, r) => a + toNum(r["Sales"]), 0),
+          qty:        filtered.reduce((a, r) => a + toNum(r["QTY"]), 0),
+          skus:       new Set(filtered.map(r => String(r["EU CODE"] ?? "").trim())).size,
+          localItems: new Set(filtered.map(r => String(r["Local item code"] ?? r["Product"] ?? "").trim()).filter(Boolean)).size,
+          companies:  new Set(filtered.map(r => String(r["Company"] ?? "").trim()).filter(Boolean)).size,
+        };
+      }, [filtered]);
+
+      const byCountry    = useMemo(() => aggNorm(filtered, r => r["Country"], r => r["Sales"]), [filtered]);
+      const byCompany    = useMemo(() => aggNorm(filtered, r => r["Company"], r => r["Sales"]).slice(0, 12), [filtered]);
+      const byCategory   = useMemo(() => aggNorm(filtered, r => r["PROJECT CATEGORY"], r => r["Sales"]).slice(0, 10), [filtered]);
+      const topProducts  = useMemo(() => { const m = {}; for (const r of filtered) { const k = String(r["EU CODE"] ?? "").trim(); if (!k) continue; if (!m[k]) m[k] = { key: r["EU Description"] || r["Product"] || k, value: 0 }; m[k].value += toNum(r["Sales"]); } return Object.values(m).sort((a, b) => b.value - a.value).slice(0, 10); }, [filtered]);
+      const topSuppliers = useMemo(() => aggNorm(filtered, r => r["Suppliers"], r => r["Sales"]).slice(0, 10), [filtered]);
+
+      const tabs = ["overview", "product lines", "suppliers", "supplier × country", "product × country", "matched"];
+      const hasFilter = Object.values(filters).some(v => v !== "");
+
+      const Sel = ({ field, options, label }) => (
+        <select value={filters[field]} onChange={e => setFilters(f => ({ ...f, [field]: e.target.value }))}
+          style={{ background: "#091510", border: `1px solid ${C.border}`, borderRadius: 5, color: filters[field] ? C.mid : C.muted, padding: "5px 9px", fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          <option value="">{label}</option>
+          {options?.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      );
+
+      const currentPeriodMeta = periodsMeta?.periods?.find(p => p.id === periodId);
+
+      return (
+        <div style={{ minHeight: "100vh", background: C.bg, color: C.mid, ...mono, fontSize: 13 }}>
+          <div style={{ background: "#0a1510", borderBottom: `1px solid #1a2e22`, padding: "13px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 30, height: 30, background: "linear-gradient(135deg,#2a9d5c,#1a6640)", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>⬡</div>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 15, color: C.light }}>Neftys Sales Dashboard</div>
+                <div style={{ fontSize: 9, color: "#4a7a60", letterSpacing: "0.07em" }}>GROUP DATABASE ANALYSER</div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              {periodsMeta?.periods?.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Period</span>
+                  <select
+                    value={preview ? "__preview__" : (periodId || "")}
+                    disabled={!!preview}
+                    onChange={e => setPeriodId(e.target.value)}
+                    style={{ background: "#0e2818", border: `1px solid #2a5e3a`, borderRadius: 5, color: C.accent, padding: "6px 10px", fontSize: 12, fontWeight: 700, outline: "none", cursor: preview ? "default" : "pointer", fontFamily: "inherit" }}>
+                    {preview && <option value="__preview__">Preview: {preview.name}</option>}
+                    {periodsMeta.periods.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+              )}
+              {preview && (
+                <button onClick={exitPreview} style={{ ...BS, color: "#e05050", borderColor: "#3e1e1e" }}>✕ Exit preview</button>
+              )}
+              <label style={{ background: "#0e2818", border: `1px solid #2a5e3a`, borderRadius: 5, padding: "7px 14px", cursor: "pointer", fontSize: 11, color: C.accent, fontWeight: 700 }}
+                onDragOver={e => e.preventDefault()} onDrop={onFile} title="Loads a CSV in your browser only — nothing is saved. To publish new data for everyone, add the CSV to the GitHub repo instead.">
+                ↑ Quick preview CSV
+                <input type="file" accept=".csv" style={{ display: "none" }} onChange={onFile} />
+              </label>
+            </div>
+          </div>
+
+          {error && (
+            <div style={{ margin: "14px 18px", padding: "10px 14px", background: "#2a1414", border: "1px solid #4e2323", borderRadius: 6, color: "#f0a0a0", fontSize: 12 }}>{error}</div>
+          )}
+
+          {loading && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "50vh", color: C.accent }}>Loading…</div>}
+
+          {data && !loading && (
+            <div style={{ padding: "14px 18px" }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6, alignItems: "center" }}>
+                <Sel field="country"     options={opts.countries}    label="All Countries"     />
+                <Sel field="company"     options={opts.companies}    label="All Companies"     />
+                <Sel field="animalType"  options={opts.animalTypes}  label="All Animal Types"  />
+                <Sel field="productLine" options={opts.productLines} label="All Product Lines" />
+                <Sel field="supplier"    options={opts.suppliers}    label="All Suppliers"     />
+                <Sel field="category"    options={opts.categories}   label="All Categories"    />
+                {hasFilter && <button onClick={() => setFilters(INIT_FILTERS)} style={{ ...BS, color: "#e05050", borderColor: "#3e1e1e" }}>✕ Clear</button>}
+                <div style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>
+                  {filtered.length.toLocaleString()} rows{data.length !== filtered.length ? ` / ${data.length.toLocaleString()} total` : ""}
+                </div>
+              </div>
+
+              {!preview && currentPeriodMeta && (
+                <div style={{ fontSize: 10, color: "#3f6552", marginBottom: 12 }}>
+                  {currentPeriodMeta.label} · data published {fmtDate(currentPeriodMeta.generatedAt)}
+                </div>
+              )}
+              {preview && <div style={{ height: 6 }} />}
+
+              {kpis && (
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                  {[["Total Sales", fmtCcy(kpis.sales)], ["Total Qty", fmtNum(kpis.qty)], ["Companies", kpis.companies]].map(([l, v]) => (
+                    <div key={l} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 7, padding: "13px 16px", flex: "1 1 110px", minWidth: 110 }}>
+                      <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em" }}>{l}</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: C.light, marginTop: 3 }}>{v}</div>
+                    </div>
+                  ))}
+                  <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 7, padding: "13px 16px", flex: "1 1 110px", minWidth: 110 }}>
+                    <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Product Codes</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                        <span style={{ fontSize: 10, color: C.muted }}>EU Codes</span>
+                        <span style={{ fontSize: 18, fontWeight: 800, color: C.light }}>{fmtNum(kpis.skus)}</span>
+                      </div>
+                      <div style={{ height: 1, background: C.border }} />
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                        <span style={{ fontSize: 10, color: C.muted }}>Local Items</span>
+                        <span style={{ fontSize: 18, fontWeight: 800, color: C.light }}>{fmtNum(kpis.localItems)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, marginBottom: 14, flexWrap: "wrap" }}>
+                {tabs.map(t => (
+                  <button key={t} onClick={() => setTab(t)} style={{
+                    background: "none", border: "none", borderBottom: tab === t ? `2px solid ${C.green}` : "2px solid transparent",
+                    color: tab === t ? C.accent : C.muted, padding: "7px 14px", cursor: "pointer",
+                    fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: -1, fontFamily: "inherit"
+                  }}>{t}</button>
+                ))}
+              </div>
+
+              {tab === "overview" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <MiniTable title="Sales by Country"          rows={byCountry}   max={Math.max(...byCountry.map(r => r.value), 1)} />
+                    <MiniTable title="Sales by Company"          rows={byCompany}   max={Math.max(...byCompany.map(r => r.value), 1)} />
+                    <MiniTable title="Top 10 Categories"         rows={byCategory}  max={Math.max(...byCategory.map(r => r.value), 1)} />
+                  </div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <MiniTable title="Top 10 Products by Sales"  rows={topProducts}  max={Math.max(...topProducts.map(r => r.value), 1)} />
+                    <MiniTable title="Top 10 Suppliers by Sales" rows={topSuppliers} max={Math.max(...topSuppliers.map(r => r.value), 1)} />
+                    <AnimalCountryChart filtered={filtered} />
+                  </div>
+                </div>
+              )}
+              {tab === "product lines"      && <GroupView filtered={filtered} groupKey="Product Line" title="Product Lines" />}
+              {tab === "suppliers"          && <GroupView filtered={filtered} groupKey="Suppliers" title="Suppliers" extraCol="Product Line" extraFn={r => String(r["Product Line"] ?? "").trim() || null} />}
+              {tab === "supplier × country" && <MatrixView filtered={filtered} rowKey="Suppliers" rowLabel="Supplier" title="Supplier × Country Matrix" topN={30} />}
+              {tab === "product × country"  && <MatrixView filtered={filtered} rowKey="EU Description" rowLabel="Product" title="Product × Country Matrix" topN={30} />}
+              {tab === "matched"            && <MatchedView matchMap={matchMap} filters={filters} />}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
