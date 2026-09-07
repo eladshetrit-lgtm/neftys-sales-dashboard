@@ -111,20 +111,6 @@
       </div>
     );
 
-    const COUNTRY_CODES = { france: "FR", spain: "ES", poland: "PL", portugal: "PT", morocco: "MA", africa: "AF" };
-    const COUNTRY_COLORS = { france: "#4a9eff", spain: "#ffcc4a", poland: "#ff6b6b", portugal: "#4aff9e", morocco: "#c94aff", africa: "#8a8a8a" };
-    const withCountryTag = (name) => {
-      const key = String(name ?? "").trim().toLowerCase();
-      const code = COUNTRY_CODES[key];
-      if (!code) return name;
-      return (
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 9, fontWeight: 800, color: "#0a1510", background: COUNTRY_COLORS[key] || "#3ecf7e", borderRadius: 3, padding: "1px 4px", letterSpacing: "0.02em", lineHeight: "1.4" }}>{code}</span>
-          {name}
-        </span>
-      );
-    };
-
     function Pager({ page, pages, setPage }) {
       if (pages <= 1) return null;
       return (
@@ -750,7 +736,7 @@
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: "1 1 220px", minWidth: 0 }}>
-                      <MiniTable title="Sales by Country"  rows={byCountry}  max={Math.max(...byCountry.map(r => r.value), 1)} renderKey={withCountryTag} />
+                      <MiniTable title="Sales by Country"  rows={byCountry}  max={Math.max(...byCountry.map(r => r.value), 1)} />
                       <MiniTable title="Top 10 Categories" rows={byCategory} max={Math.max(...byCategory.map(r => r.value), 1)} />
                     </div>
                     <div style={{ flex: "2 1 340px", minWidth: 0 }}>
