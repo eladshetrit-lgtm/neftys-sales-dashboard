@@ -101,10 +101,21 @@
     const mono = { fontFamily: "'DM Mono','Fira Code','Courier New',monospace" };
 
     const Bar = ({ pct }) => (
-      <div style={{ width: "100%", height: 5, background: "#1a2e22", borderRadius: 3, overflow: "hidden" }}>
-        <div style={{ width: `${Math.min(Math.max(pct || 0, 0), 100)}%`, height: "100%", background: C.green, borderRadius: 3 }} />
+      <div style={{ width: "100%", height: 6, background: "#0d1a13", borderRadius: 3, overflow: "hidden" }}>
+        <div style={{
+          width: `${Math.min(Math.max(pct || 0, 0), 100)}%`, height: "100%", borderRadius: 3,
+          background: "linear-gradient(90deg, #1a6640, #3ecf7e)",
+          boxShadow: pct > 0 ? "0 0 6px rgba(62,207,126,0.45)" : "none",
+          transition: "width 0.3s ease",
+        }} />
       </div>
     );
+
+    const COUNTRY_FLAGS = { france: "🇫🇷", spain: "🇪🇸", poland: "🇵🇱", portugal: "🇵🇹", morocco: "🇲🇦", africa: "🌍" };
+    const withFlag = (name) => {
+      const flag = COUNTRY_FLAGS[String(name ?? "").trim().toLowerCase()];
+      return flag ? `${flag} ${name}` : name;
+    };
 
     function Pager({ page, pages, setPage }) {
       if (pages <= 1) return null;
@@ -119,16 +130,18 @@
       );
     }
 
-    function MiniTable({ title, rows, max, nameWidth = 128, valueWidth = 76 }) {
+    function MiniTable({ title, rows, max, nameWidth = 122, valueWidth = 74, renderKey }) {
+      const total = rows.reduce((a, r) => a + r.value, 0);
       return (
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px", flex: "1 1 220px", minWidth: 0, height: "100%" }}>
           <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>{title}</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
             <tbody>{rows.map((r, i) => (
               <tr key={i} style={{ borderTop: i > 0 ? `1px solid #0f1e16` : "none" }}>
-                <td style={{ padding: "4px 6px 4px 0", color: C.mid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: nameWidth }}>{r.key}</td>
+                <td style={{ padding: "4px 6px 4px 0", color: C.mid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: nameWidth }}>{renderKey ? renderKey(r.key) : r.key}</td>
                 <td style={{ textAlign: "right", color: C.light, fontWeight: 700, padding: "4px 8px 4px 4px", whiteSpace: "nowrap", width: valueWidth }}>{fmtCcy(r.value)}</td>
-                <td style={{ paddingLeft: 4 }}><Bar pct={(r.value / max) * 100} /></td>
+                <td style={{ textAlign: "right", color: C.muted, fontSize: 10, width: 34, whiteSpace: "nowrap" }}>{total ? ((r.value / total) * 100).toFixed(0) : 0}%</td>
+                <td style={{ paddingLeft: 6 }}><Bar pct={(r.value / max) * 100} /></td>
               </tr>
             ))}</tbody>
           </table>
@@ -606,7 +619,7 @@
       const byCompany    = useMemo(() => aggNorm(filtered, r => r["Company"], r => r["Sales"]), [filtered]);
       const byCategory   = useMemo(() => aggNorm(filtered, r => r["PROJECT CATEGORY"], r => r["Sales"]).slice(0, 10), [filtered]);
       const topProductLines = useMemo(() => aggNorm(filtered, r => r["Product Line"], r => r["Sales"]).slice(0, 10), [filtered]);
-      const topProducts = useMemo(() => { const m = {}; for (const r of filtered) { const k = String(r["EU CODE"] ?? "").trim(); if (!k) continue; if (!m[k]) m[k] = { key: r["EU Description"] || r["Product"] || k, value: 0 }; m[k].value += toNum(r["Sales"]); } return Object.values(m).sort((a, b) => b.value - a.value).slice(0, 5); }, [filtered]);
+      const topProducts = useMemo(() => { const m = {}; for (const r of filtered) { const k = String(r["EU CODE"] ?? "").trim(); if (!k) continue; if (!m[k]) m[k] = { key: r["EU Description"] || r["Product"] || k, value: 0 }; m[k].value += toNum(r["Sales"]); } return Object.values(m).sort((a, b) => b.value - a.value).slice(0, 10); }, [filtered]);
       const topSuppliers = useMemo(() => aggNorm(filtered, r => r["Suppliers"], r => r["Sales"]).slice(0, 10), [filtered]);
 
       const tabs = ["overview", "product lines", "suppliers", "supplier × country", "product × country", "matched"];
@@ -624,6 +637,7 @@
 
       return (
         <div style={{ minHeight: "100vh", background: C.bg, color: C.mid, ...mono, fontSize: 13 }}>
+          <div style={{ height: 3, background: "linear-gradient(90deg, #0d3d24, #2a9d5c, #7fffd4, #2a9d5c, #0d3d24)" }} />
           <div style={{ background: "#0a1510", borderBottom: `1px solid #1a2e22`, padding: "13px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 30, height: 30, background: "linear-gradient(135deg,#2a9d5c,#1a6640)", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>⬡</div>
@@ -680,21 +694,24 @@
               </div>
 
               {!preview && currentPeriodMeta && (
-                <div style={{ fontSize: 10, color: "#3f6552", marginBottom: 12 }}>
-                  {currentPeriodMeta.label} · data published {fmtDate(currentPeriodMeta.generatedAt)}
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: "#5a9478", marginBottom: 12, background: "#0b1a13", border: "1px solid #163726", borderRadius: 20, padding: "3px 10px 3px 8px" }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.green, boxShadow: "0 0 5px rgba(42,157,92,0.8)" }} />
+                  {currentPeriodMeta.label} · published {fmtDate(currentPeriodMeta.generatedAt)}
                 </div>
               )}
               {preview && <div style={{ height: 6 }} />}
 
               {kpis && (
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                  {[["Total Sales", fmtCcy(kpis.sales)], ["Total Qty", fmtNum(kpis.qty)], ["Companies", kpis.companies]].map(([l, v]) => (
-                    <div key={l} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 7, padding: "13px 16px", flex: "1 1 110px", minWidth: 110 }}>
+                  {[["Total Sales", fmtCcy(kpis.sales), "€"], ["Total Qty", fmtNum(kpis.qty), "▤"], ["Companies", kpis.companies, "⬢"]].map(([l, v, icon]) => (
+                    <div key={l} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 7, padding: "13px 16px", flex: "1 1 110px", minWidth: 110, position: "relative", overflow: "hidden" }}>
+                      <div style={{ position: "absolute", top: 8, right: 10, fontSize: 26, color: C.green, opacity: 0.18, fontWeight: 800, lineHeight: 1 }}>{icon}</div>
                       <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em" }}>{l}</div>
                       <div style={{ fontSize: 22, fontWeight: 800, color: C.light, marginTop: 3 }}>{v}</div>
                     </div>
                   ))}
-                  <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 7, padding: "13px 16px", flex: "1 1 110px", minWidth: 110 }}>
+                  <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 7, padding: "13px 16px", flex: "1 1 110px", minWidth: 110, position: "relative", overflow: "hidden" }}>
+                    <div style={{ position: "absolute", top: 8, right: 10, fontSize: 26, color: C.green, opacity: 0.18, fontWeight: 800, lineHeight: 1 }}>#</div>
                     <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Product Codes</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
@@ -725,7 +742,7 @@
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: "1 1 220px", minWidth: 0 }}>
-                      <MiniTable title="Sales by Country"  rows={byCountry}  max={Math.max(...byCountry.map(r => r.value), 1)} />
+                      <MiniTable title="Sales by Country"  rows={byCountry}  max={Math.max(...byCountry.map(r => r.value), 1)} renderKey={withFlag} />
                       <MiniTable title="Top 10 Categories" rows={byCategory} max={Math.max(...byCategory.map(r => r.value), 1)} />
                     </div>
                     <div style={{ flex: "2 1 340px", minWidth: 0 }}>
@@ -734,7 +751,7 @@
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, alignItems: "stretch" }}>
                     <MiniTable title="Top 10 Product Lines by Sales" rows={topProductLines} max={Math.max(...topProductLines.map(r => r.value), 1)} />
-                    <MiniTable title="Top 5 Products by Sales" rows={topProducts} max={Math.max(...topProducts.map(r => r.value), 1)} />
+                    <MiniTable title="Top 10 Products by Sales" rows={topProducts} max={Math.max(...topProducts.map(r => r.value), 1)} />
                     <MiniTable title="Top 10 Suppliers by Sales" rows={topSuppliers} max={Math.max(...topSuppliers.map(r => r.value), 1)} />
                     <AnimalCountryChart filtered={filtered} />
                   </div>
