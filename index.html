@@ -605,7 +605,7 @@
       const byCountry    = useMemo(() => aggNorm(filtered, r => r["Country"], r => r["Sales"]), [filtered]);
       const byCompany    = useMemo(() => aggNorm(filtered, r => r["Company"], r => r["Sales"]), [filtered]);
       const byCategory   = useMemo(() => aggNorm(filtered, r => r["PROJECT CATEGORY"], r => r["Sales"]).slice(0, 10), [filtered]);
-      const topProducts  = useMemo(() => { const m = {}; for (const r of filtered) { const k = String(r["EU CODE"] ?? "").trim(); if (!k) continue; if (!m[k]) m[k] = { key: r["EU Description"] || r["Product"] || k, value: 0 }; m[k].value += toNum(r["Sales"]); } return Object.values(m).sort((a, b) => b.value - a.value).slice(0, 10); }, [filtered]);
+      const topProductLines = useMemo(() => aggNorm(filtered, r => r["Product Line"], r => r["Sales"]).slice(0, 10), [filtered]);
       const topSuppliers = useMemo(() => aggNorm(filtered, r => r["Suppliers"], r => r["Sales"]).slice(0, 10), [filtered]);
 
       const tabs = ["overview", "product lines", "suppliers", "supplier × country", "product × country", "matched"];
@@ -732,7 +732,7 @@
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <MiniTable title="Top 10 Products by Sales"  rows={topProducts}  max={Math.max(...topProducts.map(r => r.value), 1)} />
+                    <MiniTable title="Top 10 Product Lines by Sales" rows={topProductLines} max={Math.max(...topProductLines.map(r => r.value), 1)} />
                     <MiniTable title="Top 10 Suppliers by Sales" rows={topSuppliers} max={Math.max(...topSuppliers.map(r => r.value), 1)} />
                     <AnimalCountryChart filtered={filtered} />
                   </div>
