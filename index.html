@@ -513,7 +513,7 @@
 
       // Load the list of available periods once on mount.
       useEffect(() => {
-        fetch("data/processed/index.json")
+        fetch("data/processed/index.json", { cache: "no-cache" })
           .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
           .then(meta => {
             setPeriodsMeta(meta);
@@ -528,7 +528,7 @@
         const meta = periodsMeta?.periods?.find(p => p.id === periodId);
         if (!meta) return;
         setLoading(true); setError(null);
-        fetch(meta.file)
+        fetch(meta.file, { cache: "no-cache" })
           .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
           .then(rows => { setData(rows); setFilters(INIT_FILTERS); setTab("overview"); })
           .catch(err => setError("Could not load data: " + err.message))
