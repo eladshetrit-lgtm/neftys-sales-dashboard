@@ -2,11 +2,17 @@
 // Builds /dist from /index.html + /data/raw/*.csv
 //
 // Each file in data/raw/ becomes one selectable "period" in the dashboard.
-// Filename convention: "<order>-<Label>.csv", e.g. "01-FY2025.csv", "02-YTD2026.csv".
-//   - The numeric prefix controls display order (and which period the sort favors as "latest").
-//   - The remaining stem becomes the period label ("FY2025" -> "FY 2025", "YTD2026" -> "YTD 2026").
-// To add a new period later (e.g. a historical year for growth comparisons), just drop another
-// CSV into data/raw/ with the same 12 columns and push — no code changes needed.
+// Filename convention: "<order>-<anything>.csv", e.g. "01-FY2025.csv", "02-YTD2026.csv".
+//   - The numeric prefix ALWAYS controls display order (and which period is shown by default
+//     — the highest number). This part is required.
+//   - The label shown in the dropdown comes from (in priority order):
+//       1. A "Period" column in the CSV itself, if present — e.g. put "YTD May 2026" in every
+//          row's Period column and that's exactly what shows up. This is the recommended way,
+//          since it survives the file being renamed and makes the period explicit in the data.
+//       2. Otherwise, the rest of the filename after the number, prettified
+//          ("FY2025" -> "FY 2025", "YTD-May-2026" -> "YTD May 2026").
+// To add a new period later (e.g. monthly data, or a historical year for growth comparisons),
+// just drop another CSV into data/raw/ with the same 12 columns and push — no code changes needed.
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, cpSync, statSync } from "node:fs";
 import { join, dirname, basename, extname } from "node:path";
@@ -72,6 +78,35 @@ function prettifyLabel(stem) {
   return stem.replace(/[_-]+/g, " ").trim();
 }
 
+function slugify(label) {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+// ─── Optional "Period" column: lets the CSV itself say what period it is  ──
+// ─── ("YTD May 2026"), instead of relying on the filename.                ──
+
+const PERIOD_COLUMN_ALIASES = ["period", "reporting period", "period label"];
+
+function findPeriodColumn(headers) {
+  return headers.find(h => PERIOD_COLUMN_ALIASES.includes(h.trim().toLowerCase())) || null;
+}
+
+function extractPeriodLabel(rawRows, periodColumn, file) {
+  if (!periodColumn) return null;
+  const counts = {};
+  for (const row of rawRows) {
+    const v = String(row[periodColumn] ?? "").trim();
+    if (!v) continue;
+    counts[v] = (counts[v] || 0) + 1;
+  }
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return null;
+  if (entries.length > 1) {
+    console.warn(`⚠ ${file}: the "${periodColumn}" column has more than one value (${entries.map(([v, c]) => `"${v}" ×${c}`).join(", ")}) — using the most common: "${entries[0][0]}".`);
+  }
+  return entries[0][0];
+}
+
 // ─── Canonical casing map, built across ALL periods so the same value  ─────
 // ─── (e.g. "POLAND" / "Poland") always renders identically everywhere. ─────
 
@@ -116,6 +151,7 @@ function main() {
   }
 
   const periods = [];
+  const usedSlugs = new Set();
 
   for (const file of files) {
     const fullPath = join(RAW_DIR, file);
@@ -137,10 +173,22 @@ function main() {
 
     const stem = basename(file, extname(file));
     const m = stem.match(/^(\d+)[-_]?(.*)$/);
-    const order = m ? parseInt(m[1], 10) : 0;
-    const rawLabel = m && m[2] ? m[2] : stem;
-    const label = prettifyLabel(rawLabel);
-    const slug = rawLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || `period-${order}`;
+    if (!m) {
+      console.error(`✗ ${file}: filename must start with a number to control ordering, e.g. "03-${file}". Skipping.`);
+      continue;
+    }
+    const order = parseInt(m[1], 10);
+    const rawLabel = m[2] || stem;
+
+    const periodColumn = findPeriodColumn(headers);
+    const periodColumnLabel = extractPeriodLabel(rawRows, periodColumn, file);
+    const label = periodColumnLabel || prettifyLabel(rawLabel);
+    let slug = slugify(label) || `period-${order}`;
+    if (usedSlugs.has(slug)) {
+      console.warn(`⚠ ${file}: period label "${label}" collides with an earlier file — disambiguating using the order number.`);
+      slug = `${slug}-${order}`;
+    }
+    usedSlugs.add(slug);
 
     writeFileSync(join(DIST_DATA_DIR, `${slug}.json`), JSON.stringify(rows));
 

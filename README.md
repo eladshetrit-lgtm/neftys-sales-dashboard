@@ -1,6 +1,6 @@
 # Neftys Sales Dashboard
 
-Live site: set once GitHub Pages is enabled (Settings → Pages → shows the URL).
+Live site: https://eladshetrit-lgtm.github.io/neftys-sales-dashboard/
 
 A self-contained sales dashboard (React, no backend) that reads its data from
 small JSON files generated automatically from CSV files you drop into this repo.
@@ -12,13 +12,23 @@ small JSON files generated automatically from CSV files you drop into this repo.
    - The CSV must have these 12 columns (same as before): `EU CODE, EU Description,
      Local item code, Product, QTY, Sales, Product Line, Company, Country,
      Suppliers, PROJECT CATEGORY, Animal Type`.
-   - Name the file `<order>-<Label>.csv`, e.g. `01-FY2025.csv`, `02-YTD2026.csv`,
-     `03-Jan2027.csv`. The number controls the order it appears in the dashboard's
-     period dropdown; the highest number is shown by default when the site loads.
+   - **Add a 13th column called `Period`**, filled with the exact label you want
+     shown in the dashboard's dropdown for every row — e.g. `YTD May 2026`,
+     `YTD June 2026`, `FY 2025`. This is the recommended way to control the
+     label: it lives in the data itself, so it's correct no matter what the
+     file gets renamed to. (If you skip this column, the label falls back to
+     the filename instead — see below.)
+   - Name the file `<order>-<anything>.csv`, e.g. `01-FY2025.csv`,
+     `02-YTD2026.csv`, `03-YTD-Jun-2026.csv`. **The leading number is required**
+     — it controls the order in the dropdown, and the highest number is shown
+     by default when the site loads. The rest of the filename only matters if
+     you didn't add a `Period` column (in which case it becomes the label,
+     prettified — `YTD-Jun-2026` → "YTD Jun 2026").
    - To **replace** a period's data, just re-upload a file with the exact same
      name — GitHub will ask to overwrite it.
-   - To **add** a new period (e.g. a new month, or a prior year for comparison),
-     upload a new file with a new number/label. No code changes needed.
+   - To **add** a new period (e.g. next month's YTD, or a prior year for
+     comparison), upload a new file with a new number and `Period` value.
+     No code changes needed.
 3. Commit directly to the `main` branch.
 4. Wait about a minute — GitHub Actions rebuilds the dashboard and republishes it
    automatically. You can watch progress under the **Actions** tab.
@@ -46,3 +56,14 @@ refreshing the page brings back the published data.
 node scripts/build-data.mjs   # writes ./dist
 cd dist && python3 -m http.server 8000
 ```
+
+## Adding a "Period" column to an old CSV (one-off)
+
+If you have an existing CSV without a `Period` column, `scripts/add-period-column.mjs`
+adds one for you (every row gets the same label):
+
+```
+node scripts/add-period-column.mjs data/raw/02-YTD2026.csv "YTD May 2026"
+```
+
+This was already run for the initial FY2025 and YTD2026 files in this repo.
